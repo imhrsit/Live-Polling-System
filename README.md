@@ -99,7 +99,7 @@ polling-system/
    
    **Server (.env in /server folder):**
    ```env
-   PORT=5000
+   PORT=5003
    MONGODB_URI=your_mongodb_atlas_connection_string
    SESSION_SECRET=your-secret-key
    NODE_ENV=development
@@ -108,8 +108,8 @@ polling-system/
 
    **Client (.env in /client folder):**
    ```env
-   REACT_APP_SERVER_URL=http://localhost:5000
-   REACT_APP_SOCKET_URL=http://localhost:5000
+   REACT_APP_SERVER_URL=http://localhost:5003
+   REACT_APP_SOCKET_URL=http://localhost:5003
    REACT_APP_POLL_TIMEOUT=60
    REACT_APP_MAX_OPTIONS=6
    ```
@@ -131,7 +131,7 @@ polling-system/
 
 ### URLs
 - **Frontend:** http://localhost:3000
-- **Backend API:** http://localhost:5000
+- **Backend API:** http://localhost:5003
 
 ## 🔄 Real-time Events
 
