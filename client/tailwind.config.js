@@ -34,6 +34,17 @@ export default {
                     700: '#0369a1',
                     800: '#075985',
                     900: '#0c4a6e',
+                },
+                // Custom purple palette from design
+                'intervue': {
+                    light: '#7785DA',
+                    primary: '#5767D0', 
+                    dark: '#4F0DCE',
+                    gray: {
+                        light: '#F2F2F2',
+                        medium: '#373737',
+                        dark: '#6E6E6E'
+                    }
                 }
             }
         },
