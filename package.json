@@ -12,7 +12,13 @@
     "install-client": "cd client && npm install",
     "install-all": "npm run install-server && npm run install-client"
   },
-  "keywords": ["polling", "real-time", "react", "express", "socket.io"],
+  "keywords": [
+    "polling",
+    "real-time",
+    "react",
+    "express",
+    "socket.io"
+  ],
   "author": "Harsh Tiwari",
   "license": "MIT",
   "devDependencies": {
