@@ -1,0 +1,24 @@
+{
+  "name": "polling-system-server",
+  "version": "1.0.0",
+  "description": "Express server for polling system with Socket.io and MongoDB",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": ["express", "socket.io", "mongodb", "polling"],
+  "author": "Harsh Tiwari",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.8.0",
+    "mongoose": "^8.6.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}
