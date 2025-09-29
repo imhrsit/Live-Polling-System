@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -18,6 +18,8 @@ import {
     selectLiveStats
 } from '../../redux/slices/studentsSlice';
 import socketService from '../../services/socketService';
+import CreatePoll from './CreatePoll';
+import PollResults from './PollResults';
 
 const TeacherDashboard = () => {
     const navigate = useNavigate();
@@ -30,6 +32,8 @@ const TeacherDashboard = () => {
     const totalResponses = useSelector(selectTotalResponses);
     const studentCount = useSelector(selectStudentCount);
     const liveStats = useSelector(selectLiveStats);
+    
+    const [showCreatePoll, setShowCreatePoll] = useState(false);
 
     useEffect(() => {
         // Check if user is teacher, if not redirect
@@ -60,8 +64,12 @@ const TeacherDashboard = () => {
     };
 
     const handleCreatePoll = () => {
-        // This will be implemented when we create the CreatePoll component
-        console.log('Create poll clicked');
+        setShowCreatePoll(true);
+    };
+    
+    const handlePollCreated = () => {
+        // Poll created successfully, modal will close automatically
+        console.log('Poll created successfully');
     };
 
     const handleStartPoll = () => {
@@ -162,102 +170,86 @@ const TeacherDashboard = () => {
                 </div>
 
                 {/* Poll Management */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    {/* Current Poll */}
-                    <div className="bg-white rounded-lg shadow-sm border">
-                        <div className="p-6">
-                            <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                                Current Poll
-                            </h2>
-
-                            {currentPoll ? (
+                <div className="space-y-8">
+                    {/* Current Poll Section */}
+                    {currentPoll ? (
+                        <div className="bg-white rounded-lg shadow-sm border p-6">
+                            <div className="flex justify-between items-start mb-4">
                                 <div>
-                                    <div className="mb-4">
-                                        <h3 className="font-medium text-gray-900 mb-2">
-                                            {currentPoll.question}
-                                        </h3>
-                                        <div className="space-y-1">
-                                            {currentPoll.options?.map((option, index) => (
-                                                <div key={index} className="text-sm text-gray-600">
-                                                    {index + 1}. {option}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    <div className="flex space-x-2">
-                                        {!isPollActive ? (
-                                            <button
-                                                onClick={handleStartPoll}
-                                                className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition duration-200"
-                                            >
-                                                Start Poll
-                                            </button>
-                                        ) : (
-                                            <button
-                                                onClick={handleEndPoll}
-                                                className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition duration-200"
-                                            >
-                                                End Poll
-                                            </button>
-                                        )}
+                                    <h2 className="text-lg font-semibold text-gray-900 mb-2">
+                                        Current Poll
+                                    </h2>
+                                    <h3 className="font-medium text-gray-900 mb-2">
+                                        {currentPoll.question}
+                                    </h3>
+                                    <div className="space-y-1">
+                                        {currentPoll.options?.map((option, index) => (
+                                            <div key={index} className="text-sm text-gray-600">
+                                                {index + 1}. {option}
+                                            </div>
+                                        ))}
                                     </div>
                                 </div>
-                            ) : (
-                                <div className="text-center py-8">
-                                    <p className="text-gray-500 mb-4">No active poll</p>
+                                <div className="flex gap-2">
+                                    {!isPollActive ? (
+                                        <button
+                                            onClick={handleStartPoll}
+                                            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition duration-200"
+                                        >
+                                            Start Poll
+                                        </button>
+                                    ) : (
+                                        <button
+                                            onClick={handleEndPoll}
+                                            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition duration-200"
+                                        >
+                                            End Poll
+                                        </button>
+                                    )}
                                     <button
                                         onClick={handleCreatePoll}
-                                        className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition duration-200"
+                                        disabled={isPollActive && studentCount > totalResponses}
+                                        className={`px-4 py-2 rounded-lg text-sm font-medium transition duration-200 ${
+                                            isPollActive && studentCount > totalResponses
+                                                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                                : 'bg-[#5767D0] hover:bg-[#4F0DCE] text-white'
+                                        }`}
                                     >
                                         Create New Poll
                                     </button>
                                 </div>
-                            )}
+                            </div>
                         </div>
-                    </div>
-
-                    {/* Live Results */}
-                    <div className="bg-white rounded-lg shadow-sm border">
-                        <div className="p-6">
-                            <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                                Live Results
-                            </h2>
-
-                            {pollResults.length > 0 ? (
-                                <div className="space-y-3">
-                                    {pollResults.map((result, index) => (
-                                        <div key={index} className="">
-                                            <div className="flex justify-between items-center mb-1">
-                                                <span className="text-sm font-medium text-gray-700">
-                                                    {result.answer}
-                                                </span>
-                                                <span className="text-sm text-gray-500">
-                                                    {result.count} votes
-                                                </span>
-                                            </div>
-                                            <div className="w-full bg-gray-200 rounded-full h-2">
-                                                <div
-                                                    className="bg-blue-600 h-2 rounded-full transition-all duration-500"
-                                                    style={{
-                                                        width: `${totalResponses > 0 ? (result.count / totalResponses) * 100 : 0}%`
-                                                    }}
-                                                ></div>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className="text-center py-8">
-                                    <p className="text-gray-500">
-                                        {currentPoll ? 'No responses yet' : 'Create a poll to see results'}
-                                    </p>
-                                </div>
-                            )}
+                    ) : (
+                        <div className="bg-white rounded-lg shadow-sm border p-6">
+                            <div className="text-center py-12">
+                                <div className="text-4xl mb-4">📊</div>
+                                <p className="text-gray-500 mb-6">No active poll</p>
+                                <button
+                                    onClick={handleCreatePoll}
+                                    className="bg-[#5767D0] hover:bg-[#4F0DCE] text-white px-6 py-3 rounded-lg font-medium transition duration-200"
+                                >
+                                    Create Your First Poll
+                                </button>
+                            </div>
                         </div>
-                    </div>
+                    )}
+
+                    {/* Poll Results */}
+                    <PollResults 
+                        showEndButton={true}
+                        onEndPoll={() => console.log('Poll ended from results component')}
+                    />
                 </div>
             </div>
+
+            {/* Create Poll Modal */}
+            {showCreatePoll && (
+                <CreatePoll
+                    onClose={() => setShowCreatePoll(false)}
+                    onPollCreated={handlePollCreated}
+                />
+            )}
         </div>
     );
 };

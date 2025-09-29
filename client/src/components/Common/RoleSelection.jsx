@@ -23,10 +23,10 @@ const RoleSelection = () => {
         <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-4">
             {/* Intervue Poll Logo */}
             <div className="mb-16">
-                <button className="bg-[#7785DA] hover:bg-[#5767D0] text-white px-6 py-3 rounded-full text-sm font-medium flex items-center gap-2 transition-colors">
+                <div className="bg-[#5767D0] text-white px-6 py-3 rounded-full text-sm font-medium flex items-center gap-2">
                     <span className="text-lg">✨</span>
                     Intervue Poll
-                </button>
+                </div>
             </div>
 
             {/* Main Content */}

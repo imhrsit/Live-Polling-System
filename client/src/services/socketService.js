@@ -32,7 +32,10 @@ class SocketService {
 
     connect() {
         try {
-            const serverUrl = process.env.REACT_APP_SOCKET_URL || 'http://localhost:5003';
+            // Use import.meta.env for Vite or fallback to default
+            const serverUrl = import.meta.env?.VITE_SOCKET_URL || 'http://localhost:5003';
+            
+            console.log('🔌 Connecting to socket server:', serverUrl);
 
             this.socket = io(serverUrl, {
                 transports: ['websocket', 'polling'],
@@ -42,6 +45,7 @@ class SocketService {
                 reconnectionDelay: this.reconnectDelay,
                 reconnectionDelayMax: 5000,
                 forceNew: false,
+                autoConnect: true,
             });
 
             this.setupEventListeners();
@@ -191,8 +195,16 @@ class SocketService {
     }
 
     handleConnectionError(error) {
+        this.isConnected = false;
         store.dispatch(setConnectionStatus(false));
         console.error('Socket connection failed:', error);
+        
+        // Try to reconnect after a delay
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+            setTimeout(() => {
+                this.handleReconnection();
+            }, 2000);
+        }
     }
 
     handleReconnection() {
