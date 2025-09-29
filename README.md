@@ -129,9 +129,11 @@ polling-system/
    npm run client
    ```
 
-### URLs
-- **Frontend:** http://localhost:3000
-- **Backend API:** http://localhost:5003
+## 🚀 Deployment
+
+### Live URLs
+- **Frontend:** [https://assignment-intervue-frontend-7wlm5adls.vercel.app](https://assignment-intervue-frontend-7wlm5adls.vercel.app)
+- **Backend:** [https://assignment-intervue-backend-5f9ff3vzg.vercel.app](https://assignment-intervue-backend-5f9ff3vzg.vercel.app)
 
 ## 🔄 Real-time Events
 
@@ -169,17 +171,6 @@ The application uses Socket.io for real-time communication:
   answeredAt: Date
 }
 ```
-
-## 🚀 Deployment
-
-### Vercel Deployment (Frontend)
-1. Connect your repository to Vercel
-2. Set environment variables in Vercel dashboard
-3. Deploy automatically on push to main branch
-
-### Backend Deployment
-- Deploy server to Railway, Heroku, or similar platform
-- Update client environment variables with production server URL
 
 ## 📝 Development Guidelines
 
