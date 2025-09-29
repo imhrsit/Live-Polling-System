@@ -1,11 +1,44 @@
 const { Poll, Student, Response } = require('../models');
 
 module.exports = (io) => {
-    // Store for managing timers
+    // Store for managing timers and rooms
     const pollTimers = new Map();
+    const rooms = new Map(); // Store room data: { roomId: { teacher: socketId, students: Set, pollId: null, createdAt: Date } }
+    const teacherSockets = new Map(); // Map teacher socket IDs to room IDs
+    const studentSockets = new Map(); // Map student socket IDs to room IDs and student data
 
-    // Helper function to broadcast live statistics
-    const broadcastLiveStats = async () => {
+    // Helper function to generate unique room ID
+    const generateRoomId = () => {
+        return `room_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    };
+
+    // Helper function to broadcast live statistics to a room
+    const broadcastRoomStats = async (roomId) => {
+        try {
+            const room = rooms.get(roomId);
+            if (!room) return;
+
+            const totalStudents = room.students.size;
+            const activePoll = await Poll.findActivePoll();
+            const totalResponses = activePoll ? await Response.countDocuments({ pollId: activePoll._id }) : 0;
+
+            io.to(roomId).emit('live-stats', {
+                roomId,
+                totalStudents,
+                activePollId: activePoll?._id,
+                totalResponses,
+                connectedStudents: Array.from(room.students).map(studentId => {
+                    const student = studentSockets.get(studentId);
+                    return student ? { id: student.id, name: student.name, connected: true } : null;
+                }).filter(Boolean)
+            });
+        } catch (error) {
+            console.error('Error broadcasting room stats:', error);
+        }
+    };
+
+    // Helper function to broadcast live statistics globally
+    const broadcastGlobalStats = async () => {
         try {
             const totalStudents = await Student.countDocuments({ isActive: true });
             const activePoll = await Poll.findActivePoll();
@@ -17,7 +50,7 @@ module.exports = (io) => {
                 totalResponses
             });
         } catch (error) {
-            console.error('Error broadcasting live stats:', error);
+            console.error('Error broadcasting global stats:', error);
         }
     };
 
@@ -57,15 +90,81 @@ module.exports = (io) => {
     io.on('connection', (socket) => {
         console.log(`🔌 Client connected: ${socket.id}`);
 
-        // Send current stats on connection
-        broadcastLiveStats();
+        // Send current global stats on connection
+        broadcastGlobalStats();
+
+        // Handle teacher joining and room creation
+        socket.on('teacher-join', async (data) => {
+            try {
+                const { teacherName, teacherId } = data;
+
+                if (!teacherName || !teacherId) {
+                    socket.emit('error', {
+                        message: 'Teacher name and ID are required',
+                        type: 'validation'
+                    });
+                    return;
+                }
+
+                // Create a new room for this teacher
+                const roomId = generateRoomId();
+                
+                // Store room information
+                rooms.set(roomId, {
+                    teacher: socket.id,
+                    teacherName: teacherName.trim(),
+                    teacherId,
+                    students: new Set(),
+                    pollId: null,
+                    createdAt: new Date(),
+                    isActive: true
+                });
+
+                // Store teacher socket mapping
+                teacherSockets.set(socket.id, roomId);
+                
+                // Join the teacher to their room
+                socket.join(roomId);
+                socket.roomId = roomId;
+                socket.userType = 'teacher';
+                socket.teacherId = teacherId;
+
+                // Confirm room creation to teacher
+                socket.emit('room-created', {
+                    roomId,
+                    teacherName: teacherName.trim(),
+                    teacherId,
+                    studentsCount: 0,
+                    createdAt: new Date()
+                });
+
+                console.log(`👨‍🏫 Teacher ${teacherName} created room: ${roomId}`);
+
+            } catch (error) {
+                console.error('Error in teacher-join:', error);
+                socket.emit('error', {
+                    message: 'Failed to create room',
+                    type: 'server',
+                    details: process.env.NODE_ENV === 'development' ? error.message : undefined
+                });
+            }
+        });
 
         // Teacher Events
 
-        // Teacher creates a poll
-        socket.on('teacher-create-poll', async (data) => {
+        // Enhanced teacher creates a poll with room management
+        socket.on('create-poll', async (data) => {
             try {
                 const { question, options, createdBy, timeLimit } = data;
+
+                // Validate teacher authentication
+                if (!socket.roomId || socket.userType !== 'teacher') {
+                    socket.emit('error', {
+                        message: 'Only authenticated teachers can create polls',
+                        type: 'authentication'
+                    });
+                    return;
+                }
 
                 // Validate required fields
                 if (!question || !options || !createdBy) {
@@ -76,12 +175,31 @@ module.exports = (io) => {
                     return;
                 }
 
-                // Check for active poll
+                // Auto-end any previous active polls to allow new poll creation
                 const activePoll = await Poll.findActivePoll();
                 if (activePoll) {
+                    console.log(`🔄 Auto-ending previous poll: ${activePoll.question}`);
+                    await activePoll.end();
+                    
+                    // Clear any existing timers for the previous poll
+                    if (pollTimers.has(activePoll._id.toString())) {
+                        clearTimeout(pollTimers.get(activePoll._id.toString()));
+                        pollTimers.delete(activePoll._id.toString());
+                    }
+                    
+                    // Notify clients that the previous poll ended
+                    io.to(socket.roomId).emit('poll-ended', {
+                        pollId: activePoll._id,
+                        reason: 'replaced',
+                        endedAt: activePoll.endedAt
+                    });
+                }
+
+                const room = rooms.get(socket.roomId);
+                if (!room) {
                     socket.emit('error', {
-                        message: 'There is already an active poll. Please end it first.',
-                        type: 'conflict'
+                        message: 'Room not found',
+                        type: 'not_found'
                     });
                     return;
                 }
@@ -96,8 +214,12 @@ module.exports = (io) => {
 
                 await poll.save();
 
-                // Emit to all clients
-                io.emit('poll-created', {
+                // Update room with poll ID
+                room.pollId = poll._id;
+
+                // Emit to room participants
+                io.to(socket.roomId).emit('poll-created', {
+                    roomId: socket.roomId,
                     poll: {
                         id: poll._id,
                         question: poll.question,
@@ -108,16 +230,21 @@ module.exports = (io) => {
                     }
                 });
 
-                console.log(`📊 Poll created by ${createdBy}: ${question}`);
+                console.log(`📊 Poll created in room ${socket.roomId} by ${createdBy}: ${question}`);
 
             } catch (error) {
-                console.error('Error in teacher-create-poll:', error);
+                console.error('Error in create-poll:', error);
                 socket.emit('error', {
                     message: 'Failed to create poll',
                     type: 'server',
                     details: process.env.NODE_ENV === 'development' ? error.message : undefined
                 });
             }
+        });
+
+        // Maintain backward compatibility
+        socket.on('teacher-create-poll', async (data) => {
+            socket.emit('create-poll', data);
         });
 
         // Teacher starts a poll
@@ -247,15 +374,49 @@ module.exports = (io) => {
 
         // Student Events
 
-        // Student joins the session
+        // Enhanced student joining with room management
         socket.on('student-join', async (data) => {
             try {
-                const { name, tabId } = data;
+                const { name, tabId, roomId } = data;
 
                 if (!name) {
                     socket.emit('error', {
                         message: 'Student name is required',
                         type: 'validation'
+                    });
+                    return;
+                }
+
+                // For now, join the first available room or create a default room
+                let targetRoomId = roomId;
+                
+                if (!targetRoomId) {
+                    // Find an active room or use a default room
+                    const activeRooms = Array.from(rooms.entries()).filter(([_, room]) => room.isActive);
+                    if (activeRooms.length > 0) {
+                        targetRoomId = activeRooms[0][0]; // Join the first active room
+                    } else {
+                        // Create a default room if none exists
+                        targetRoomId = 'default_room';
+                        if (!rooms.has(targetRoomId)) {
+                            rooms.set(targetRoomId, {
+                                teacher: null,
+                                teacherName: 'System',
+                                teacherId: 'system',
+                                students: new Set(),
+                                pollId: null,
+                                createdAt: new Date(),
+                                isActive: true
+                            });
+                        }
+                    }
+                }
+
+                const room = rooms.get(targetRoomId);
+                if (!room || !room.isActive) {
+                    socket.emit('error', {
+                        message: 'Room not found or inactive',
+                        type: 'not_found'
                     });
                     return;
                 }
@@ -282,19 +443,41 @@ module.exports = (io) => {
                     await student.save();
                 }
 
+                // Add student to room
+                room.students.add(socket.id);
+                
+                // Store student socket mapping
+                studentSockets.set(socket.id, {
+                    id: student._id,
+                    name: student.name,
+                    tabId: student.tabId,
+                    roomId: targetRoomId,
+                    joinedAt: new Date()
+                });
+
                 // Join student to room
-                socket.join('students');
+                socket.join(targetRoomId);
+                socket.roomId = targetRoomId;
+                socket.userType = 'student';
                 socket.studentId = student._id;
                 socket.tabId = student.tabId;
 
-                // Emit to all clients
-                io.emit('student-joined', {
+                // Notify room about new student
+                io.to(targetRoomId).emit('student-joined', {
+                    roomId: targetRoomId,
                     student: {
                         id: student._id,
                         name: student.name,
                         joinedAt: student.joinedAt
                     },
-                    totalStudents: await Student.countDocuments({ isActive: true })
+                    totalStudents: room.students.size
+                });
+
+                // Send room info and current poll to student
+                socket.emit('joined-room', {
+                    roomId: targetRoomId,
+                    studentsCount: room.students.size,
+                    teacherName: room.teacherName
                 });
 
                 // Send current active poll to the student
@@ -310,9 +493,24 @@ module.exports = (io) => {
                             startedAt: activePoll.startedAt
                         }
                     });
+
+                    // Sync timer if poll is active
+                    if (activePoll.isActive) {
+                        const elapsed = Math.floor((Date.now() - activePoll.startedAt.getTime()) / 1000);
+                        const timeLeft = Math.max(0, activePoll.timeLimit - elapsed);
+                        
+                        socket.emit('timer-sync', {
+                            timeLeft,
+                            pollActive: true,
+                            startedAt: activePoll.startedAt
+                        });
+                    }
                 }
 
-                console.log(`👨‍🎓 Student joined: ${name} (${socket.id})`);
+                // Update room stats
+                broadcastRoomStats(targetRoomId);
+
+                console.log(`👨‍🎓 Student ${name} joined room ${targetRoomId} (${socket.id})`);
 
             } catch (error) {
                 console.error('Error in student-join:', error);
@@ -444,36 +642,61 @@ module.exports = (io) => {
         // Request current poll status
         socket.on('get-poll-status', async () => {
             try {
-                const activePoll = await Poll.findActivePoll();
-
-                if (!activePoll) {
-                    socket.emit('poll-status', { activePoll: null });
+                console.log(`📊 Get poll status request from room: ${socket.roomId}`);
+                
+                if (!socket.roomId) {
+                    socket.emit('poll-status', { error: 'Not in any room' });
                     return;
                 }
 
-                const totalResponses = await Response.countDocuments({ pollId: activePoll._id });
-                const results = await Response.getPollResults(activePoll._id);
+                // Find the most recent poll for this room
+                const recentPoll = await Poll.findOne({ roomId: socket.roomId })
+                    .sort({ createdAt: -1 })
+                    .populate('responses');
 
-                socket.emit('poll-status', {
-                    activePoll: {
-                        id: activePoll._id,
-                        question: activePoll.question,
-                        options: activePoll.options,
-                        timeLimit: activePoll.timeLimit,
-                        isActive: activePoll.isActive,
-                        startedAt: activePoll.startedAt,
-                        createdAt: activePoll.createdAt
-                    },
-                    totalResponses,
-                    results
-                });
+                if (recentPoll) {
+                    console.log(`✅ Found recent poll for room ${socket.roomId}:`, {
+                        id: recentPoll._id,
+                        question: recentPoll.question,
+                        isActive: recentPoll.isActive,
+                        responses: recentPoll.responses?.length || 0,
+                        startedAt: recentPoll.startedAt
+                    });
 
+                    const pollData = {
+                        _id: recentPoll._id,
+                        question: recentPoll.question,
+                        options: recentPoll.options,
+                        timeLimit: recentPoll.timeLimit,
+                        isActive: recentPoll.isActive,
+                        createdAt: recentPoll.createdAt
+                    };
+
+                    // Include startedAt if the poll has been started
+                    if (recentPoll.startedAt) {
+                        pollData.startedAt = recentPoll.startedAt;
+                    }
+
+                    const responseData = {
+                        activePoll: pollData,
+                        results: recentPoll.responses || [],
+                        totalResponses: recentPoll.responses?.length || 0
+                    };
+
+                    console.log(`� Sending poll status:`, {
+                        question: pollData.question,
+                        isActive: pollData.isActive,
+                        hasStartedAt: !!pollData.startedAt
+                    });
+
+                    socket.emit('poll-status', responseData);
+                } else {
+                    console.log(`❌ No polls found for room: ${socket.roomId}`);
+                    socket.emit('poll-status', { activePoll: null });
+                }
             } catch (error) {
-                console.error('Error in get-poll-status:', error);
-                socket.emit('error', {
-                    message: 'Failed to get poll status',
-                    type: 'server'
-                });
+                console.error('❌ Error getting poll status:', error);
+                socket.emit('poll-status', { error: error.message });
             }
         });
 
@@ -514,32 +737,99 @@ module.exports = (io) => {
             }
         });
 
-        // Handle disconnection
-        socket.on('disconnect', async () => {
+        // Enhanced disconnection handling with room management
+        socket.on('disconnect', async (reason) => {
             try {
-                console.log(`🔌 Client disconnected: ${socket.id}`);
+                console.log(`🔌 Client disconnected: ${socket.id} (${reason})`);
 
-                if (socket.studentId) {
+                if (socket.userType === 'teacher' && socket.roomId) {
+                    // Handle teacher disconnection
+                    const room = rooms.get(socket.roomId);
+                    if (room) {
+                        // Notify students in room
+                        io.to(socket.roomId).emit('teacher-disconnected', {
+                            roomId: socket.roomId,
+                            teacherName: room.teacherName,
+                            reason: reason
+                        });
+
+                        // Keep room active for a grace period (5 minutes)
+                        setTimeout(() => {
+                            if (rooms.has(socket.roomId)) {
+                                const currentRoom = rooms.get(socket.roomId);
+                                if (currentRoom.teacher === socket.id) {
+                                    // Teacher hasn't reconnected, close room
+                                    io.to(socket.roomId).emit('room-closed', {
+                                        roomId: socket.roomId,
+                                        reason: 'Teacher disconnected'
+                                    });
+                                    
+                                    // Clean up room
+                                    rooms.delete(socket.roomId);
+                                    console.log(`🚪 Room ${socket.roomId} closed due to teacher disconnect`);
+                                }
+                            }
+                        }, 5 * 60 * 1000); // 5 minutes
+                    }
+
+                    teacherSockets.delete(socket.id);
+                    console.log(`👨‍🏫 Teacher disconnected from room ${socket.roomId}`);
+
+                } else if (socket.userType === 'student' && socket.studentId) {
+                    // Handle student disconnection
                     const student = await Student.findById(socket.studentId);
                     if (student) {
                         await student.disconnect();
-
-                        // Emit student disconnection
-                        io.emit('student-disconnected', {
-                            studentId: student._id,
-                            studentName: student.name,
-                            totalStudents: await Student.countDocuments({ isActive: true })
-                        });
-
-                        console.log(`👋 Student disconnected: ${student.name}`);
                     }
+
+                    // Remove from room
+                    if (socket.roomId) {
+                        const room = rooms.get(socket.roomId);
+                        if (room) {
+                            room.students.delete(socket.id);
+                            
+                            // Notify room about student leaving
+                            io.to(socket.roomId).emit('student-disconnected', {
+                                roomId: socket.roomId,
+                                studentId: student?._id,
+                                studentName: student?.name,
+                                totalStudents: room.students.size
+                            });
+
+                            // Update room stats
+                            broadcastRoomStats(socket.roomId);
+                        }
+                    }
+
+                    studentSockets.delete(socket.id);
+                    console.log(`👋 Student disconnected: ${student?.name || 'Unknown'} from room ${socket.roomId}`);
                 }
 
-                // Update live stats
-                broadcastLiveStats();
+                // Update global stats
+                broadcastGlobalStats();
 
             } catch (error) {
                 console.error('Error handling disconnect:', error);
+            }
+        });
+
+        // Handle poll timeout
+        socket.on('poll-timeout', async (data) => {
+            try {
+                const { pollId } = data;
+                
+                if (socket.userType !== 'teacher') {
+                    socket.emit('error', {
+                        message: 'Only teachers can handle poll timeout',
+                        type: 'authentication'
+                    });
+                    return;
+                }
+
+                await endPollAutomatically(pollId);
+                
+            } catch (error) {
+                console.error('Error in poll-timeout:', error);
             }
         });
 

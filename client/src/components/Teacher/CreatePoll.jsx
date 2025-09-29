@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { selectCurrentPoll } from '../../redux/slices/pollSlice';
+import { selectCurrentPoll, clearPoll } from '../../redux/slices/pollSlice';
 import { selectStudentCount } from '../../redux/slices/studentsSlice';
 import socketService from '../../services/socketService';
 
@@ -64,22 +64,54 @@ const CreatePoll = ({ onClose, onPollCreated }) => {
     const handleCreatePoll = async () => {
         if (!validateForm()) return;
 
-        setIsCreating(true);
+        // Check if teacher is properly connected
+        if (!socketService.isSocketConnected()) {
+            setErrors({ submit: 'Not connected to server. Please check your connection.' });
+            return;
+        }
 
-        const pollData = {
-            question: question.trim(),
-            options: options.filter(opt => opt.trim()),
-            timeLimit: timeLimit
-        };
+        setIsCreating(true);
+        setErrors({});
+
+        // Clear any previous poll state before creating new one
+        console.log('🧹 Clearing previous poll state before creating new poll');
+        dispatch(clearPoll());
 
         try {
+            const teacherData = JSON.parse(sessionStorage.getItem('teacherData') || '{}');
+            
+            const pollData = {
+                question: question.trim(),
+                options: options.filter(opt => opt.trim()).map(opt => opt.trim()),
+                timeLimit,
+                createdBy: teacherData.name || 'Teacher'
+            };
+
+            // Join as teacher first if not already joined
+            if (!socketService.getRoomId()) {
+                const teacherJoinData = {
+                    teacherName: teacherData.name || 'Teacher',
+                    teacherId: teacherData.id || 'teacher_default'
+                };
+                socketService.joinAsTeacher(teacherJoinData);
+                
+                // Wait a moment for room creation
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+
+            // Create poll via enhanced socket method
             const success = socketService.createPoll(pollData);
+
             if (success) {
+                console.log('✅ Poll created successfully');
                 onPollCreated && onPollCreated();
                 onClose();
+            } else {
+                throw new Error('Failed to emit poll creation event');
             }
         } catch (error) {
             console.error('Error creating poll:', error);
+            setErrors({ submit: 'Failed to create poll. Please try again.' });
         } finally {
             setIsCreating(false);
         }

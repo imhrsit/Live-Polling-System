@@ -11,7 +11,8 @@ import {
     selectCurrentPoll,
     selectIsPollActive,
     selectPollResults,
-    selectTotalResponses
+    selectTotalResponses,
+    clearPoll
 } from '../../redux/slices/pollSlice';
 import {
     selectStudentCount,
@@ -38,10 +39,31 @@ const TeacherDashboard = () => {
     useEffect(() => {
         // Check if user is teacher, if not redirect
         if (!isTeacher) {
-            // Set as teacher if coming from role selection
-            if (!user.type) {
+            // Try to restore teacher data from sessionStorage first
+            const storedTeacherData = sessionStorage.getItem('teacherData');
+            
+            if (storedTeacherData) {
+                try {
+                    const teacherData = JSON.parse(storedTeacherData);
+                    dispatch(setTeacher(teacherData));
+                } catch (error) {
+                    console.error('Error parsing stored teacher data:', error);
+                    sessionStorage.removeItem('teacherData');
+                }
+            } else if (!user.type) {
+                // Set as teacher if coming from role selection
                 const teacherName = prompt('Enter your name:') || 'Teacher';
-                dispatch(setTeacher({ name: teacherName }));
+                const teacherId = `teacher_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+                
+                // Store teacher data in sessionStorage for persistence
+                const teacherData = {
+                    name: teacherName,
+                    id: teacherId,
+                    type: 'teacher'
+                };
+                sessionStorage.setItem('teacherData', JSON.stringify(teacherData));
+                
+                dispatch(setTeacher(teacherData));
             } else {
                 navigate('/');
                 return;
@@ -59,7 +81,14 @@ const TeacherDashboard = () => {
 
     const handleLogout = () => {
         socketService.disconnect();
+        
+        // Clear teacher data from sessionStorage
+        sessionStorage.removeItem('teacherData');
+        
+        // Clear Redux state
         dispatch(clearUser());
+        dispatch(clearPoll());
+        
         navigate('/');
     };
 
@@ -70,6 +99,7 @@ const TeacherDashboard = () => {
     const handlePollCreated = () => {
         // Poll created successfully, modal will close automatically
         console.log('Poll created successfully');
+        // The socket service will handle clearing the poll state when new poll is created
     };
 
     const handleStartPoll = () => {

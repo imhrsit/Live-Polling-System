@@ -68,6 +68,15 @@ const StudentLogin = ({ onJoinSuccess }) => {
 
             if (joinSuccess) {
                 console.log('✅ Student joined successfully:', joinData);
+                
+                // Wait a moment then request current poll status
+                setTimeout(() => {
+                    if (socketService.isSocketConnected()) {
+                        socketService.getPollStatus();
+                        console.log('📊 Student: Requested current poll status after join');
+                    }
+                }, 1000);
+                
                 onJoinSuccess && onJoinSuccess();
             } else {
                 throw new Error('Failed to join session');

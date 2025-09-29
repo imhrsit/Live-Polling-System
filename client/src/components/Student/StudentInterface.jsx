@@ -10,7 +10,8 @@ import {
     selectCurrentPoll,
     selectIsPollActive,
     selectHasAnswered,
-    selectPollResults
+    selectPollResults,
+    clearPoll
 } from '../../redux/slices/pollSlice';
 import socketService from '../../services/socketService';
 import StudentLogin from './StudentLogin';
@@ -59,10 +60,50 @@ const StudentInterface = () => {
         }
     }, [isJoined]);
 
+    // Clear old poll state when component mounts for students
+    useEffect(() => {
+        if (isJoined) {
+            console.log('🧹 Student: Clearing any cached poll state on join');
+            // Clear any stale poll state to ensure fresh data
+            dispatch(clearPoll());
+            
+            // Request current poll status from server
+            setTimeout(() => {
+                if (socketService.isSocketConnected()) {
+                    socketService.getPollStatus();
+                    console.log('📡 Student: Requested current poll status');
+                }
+            }, 500);
+        }
+    }, [isJoined, dispatch]);
+
+    // Auto-refresh poll status every 3 seconds to catch poll updates
+    useEffect(() => {
+        if (isJoined && socketService.isSocketConnected()) {
+            const refreshInterval = setInterval(() => {
+                console.log('🔄 Student: Auto-refreshing poll status');
+                socketService.getPollStatus();
+            }, 3000);
+
+            return () => {
+                clearInterval(refreshInterval);
+                console.log('🛑 Student: Stopped auto-refresh');
+            };
+        }
+    }, [isJoined]);
+
     const determineCurrentView = () => {
+        console.log('🔍 Determining view:', {
+            currentPoll: currentPoll,
+            isPollActive: isPollActive,
+            pollIsActive: currentPoll?.isActive,
+            hasAnswered: hasAnswered,
+            pollResults: pollResults?.length
+        });
+        
         if (!currentPoll) {
             setCurrentView('waiting');
-        } else if (isPollActive && !hasAnswered) {
+        } else if ((isPollActive || currentPoll.isActive) && !hasAnswered) {
             setCurrentView('poll');
         } else if (hasAnswered || pollResults.length > 0) {
             setCurrentView('results');
@@ -81,12 +122,33 @@ const StudentInterface = () => {
         setCurrentView('results');
     };
 
+    const handleRefreshPoll = () => {
+        console.log('🔄 Student: Manually refreshing poll status');
+        dispatch(clearPoll());
+        
+        setTimeout(() => {
+            if (socketService.isSocketConnected()) {
+                socketService.getPollStatus();
+                console.log('📊 Student: Requested fresh poll status');
+            } else {
+                console.log('❌ Student: Not connected to socket');
+            }
+        }, 500);
+    };
+
     const handleLogout = () => {
         socketService.disconnect();
+        
+        // Clear all state and cached data
         dispatch(clearUser());
+        dispatch(clearPoll());
+        
+        // Clear sessionStorage
         sessionStorage.removeItem('studentName');
         sessionStorage.removeItem('studentId');
         sessionStorage.removeItem('tabId');
+        sessionStorage.removeItem('studentData');
+        
         setIsJoined(false);
         setCurrentView('login');
         navigate('/');
@@ -150,14 +212,28 @@ const StudentInterface = () => {
                         </h2>
                         <p className="text-gray-600 mb-6">
                             {currentPoll 
-                                ? 'Poll created. Waiting for teacher to start...' 
+                                ? (currentPoll.isActive 
+                                    ? 'Poll is active! Loading...' 
+                                    : 'Poll created. Waiting for teacher to start...')
                                 : 'Waiting for teacher to create a poll...'
                             }
                         </p>
-                        {currentPoll && (
+                        
+                        {/* Refresh Button */}
+                        <div className="mb-6">
+                            <button
+                                onClick={handleRefreshPoll}
+                                className="px-4 py-2 bg-[#7785DA] text-white rounded-lg font-medium hover:bg-[#5767D0] transition-colors flex items-center gap-2 mx-auto"
+                            >
+                                <span>🔄</span>
+                                Check for New Poll
+                            </button>
+                        </div>
+                        
+                        {currentPoll && !currentPoll.isActive && (
                             <div className="bg-[#7785DA]/10 border border-[#7785DA]/20 rounded-xl p-4 max-w-md mx-auto">
                                 <h3 className="font-medium text-gray-900 mb-2">
-                                    Next Question:
+                                    Poll Preview:
                                 </h3>
                                 <p className="text-sm text-gray-700 mb-2">
                                     "{currentPoll.question}"

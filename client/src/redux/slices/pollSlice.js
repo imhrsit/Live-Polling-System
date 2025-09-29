@@ -22,6 +22,22 @@ const pollSlice = createSlice({
         setPoll: (state, action) => {
             state.currentPoll = action.payload;
             state.error = null;
+            
+            // If the poll data indicates it's active, update our state accordingly
+            if (action.payload && action.payload.isActive) {
+                state.isActive = true;
+                state.timeRemaining = action.payload.timeLimit || 60;
+                
+                // Calculate remaining time if poll has started
+                if (action.payload.startedAt) {
+                    const elapsed = Math.floor((Date.now() - new Date(action.payload.startedAt).getTime()) / 1000);
+                    state.timeRemaining = Math.max(0, (action.payload.timeLimit || 60) - elapsed);
+                }
+            } else if (action.payload) {
+                // Poll exists but not active - reset active state
+                state.isActive = false;
+                state.timeRemaining = action.payload.timeLimit || 60;
+            }
         },
         startPoll: (state, action) => {
             if (state.currentPoll) {

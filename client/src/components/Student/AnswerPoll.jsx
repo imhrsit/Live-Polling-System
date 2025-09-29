@@ -75,7 +75,7 @@ const AnswerPoll = ({ onAnswerSubmitted }) => {
             // Update local state first
             dispatch(submitAnswer());
 
-            // Emit to server
+            // Emit to server with enhanced data
             const answerData = {
                 pollId: currentPoll.id,
                 answer: selectedAnswer.answer,

@@ -5,12 +5,21 @@ import store from './redux/store';
 import RoleSelection from './components/Common/RoleSelection';
 import TeacherDashboard from './components/Teacher/TeacherDashboard';
 import StudentInterface from './components/Student/StudentInterface';
+import ConnectionStatus from './components/common/ConnectionStatus';
+
+// Import debug utilities in development
+if (import.meta.env.DEV) {
+    import('./utils/debugUtils');
+}
 
 function App() {
     return (
         <Provider store={store}>
             <Router>
                 <div className="App">
+                    {/* Global Connection Status Indicator */}
+                    <ConnectionStatus />
+                    
                     <Routes>
                         {/* Default route - Role Selection */}
                         <Route path="/" element={<RoleSelection />} />

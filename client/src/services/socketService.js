@@ -11,6 +11,7 @@ import {
     updateResults,
     updateTimer,
     confirmAnswerSubmitted,
+    clearPoll,
     setError as setPollError,
 } from '../redux/slices/pollSlice';
 import {
@@ -28,6 +29,15 @@ class SocketService {
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
         this.reconnectDelay = 1000;
+        this.roomId = null;
+        this.userType = null; // 'teacher' or 'student'
+        this.connectionStatus = 'disconnected'; // 'connecting', 'connected', 'disconnected', 'error'
+        this.lastDisconnectReason = null;
+        this.stateRecovery = {
+            enabled: true,
+            lastPollState: null,
+            lastUserState: null
+        };
     }
 
     connect() {
@@ -36,6 +46,8 @@ class SocketService {
             const serverUrl = import.meta.env?.VITE_SOCKET_URL || 'http://localhost:5003';
             
             console.log('🔌 Connecting to socket server:', serverUrl);
+            
+            // Enhanced auto-reconnection configuration
 
             this.socket = io(serverUrl, {
                 transports: ['websocket', 'polling'],
@@ -60,21 +72,36 @@ class SocketService {
     setupEventListeners() {
         if (!this.socket) return;
 
-        // Connection events
+        // Connection events with enhanced status tracking
         this.socket.on('connect', () => {
             console.log('📡 Connected to server:', this.socket.id);
             this.isConnected = true;
+            this.connectionStatus = 'connected';
             this.reconnectAttempts = 0;
+            this.lastDisconnectReason = null;
 
-            store.dispatch(setConnectionStatus(true));
+            store.dispatch(setConnectionStatus({
+                connected: true,
+                socketId: this.socket.id,
+                status: 'connected'
+            }));
             store.dispatch(setSocketId(this.socket.id));
+
+            // Attempt state recovery
+            this.attemptStateRecovery();
         });
 
         this.socket.on('disconnect', (reason) => {
             console.log('📡 Disconnected from server:', reason);
             this.isConnected = false;
+            this.connectionStatus = 'disconnected';
+            this.lastDisconnectReason = reason;
 
-            store.dispatch(setConnectionStatus(false));
+            store.dispatch(setConnectionStatus({
+                connected: false,
+                status: 'disconnected',
+                reason: reason
+            }));
 
             // Attempt to reconnect if not a manual disconnect
             if (reason !== 'io client disconnect') {
@@ -84,13 +111,65 @@ class SocketService {
 
         this.socket.on('connect_error', (error) => {
             console.error('📡 Connection error:', error);
+            this.connectionStatus = 'error';
             this.handleConnectionError(error);
+        });
+
+        // Room Events
+        this.socket.on('room-created', (data) => {
+            console.log('🏠 Room created:', data);
+            this.roomId = data.roomId;
+            this.userType = 'teacher';
+            
+            store.dispatch(setConnectionStatus({
+                connected: true,
+                roomId: data.roomId,
+                userType: 'teacher'
+            }));
+        });
+
+        this.socket.on('joined-room', (data) => {
+            console.log('🚪 Joined room:', data);
+            this.roomId = data.roomId;
+            this.userType = 'student';
+            
+            store.dispatch(setConnectionStatus({
+                connected: true,
+                roomId: data.roomId,
+                userType: 'student'
+            }));
+        });
+
+        this.socket.on('teacher-disconnected', (data) => {
+            console.log('👨‍🏫 Teacher disconnected:', data);
+            store.dispatch(setPollError(`Teacher has disconnected from the room`));
+        });
+
+        this.socket.on('room-closed', (data) => {
+            console.log('🚪 Room closed:', data);
+            this.roomId = null;
+            this.userType = null;
+            store.dispatch(setPollError(`Room has been closed: ${data.reason}`));
         });
 
         // Poll Events
         this.socket.on('poll-created', (data) => {
-            console.log('📊 Poll created:', data.poll);
+            console.log('📊 Poll created event received:', {
+                newPoll: data.poll,
+                previousPoll: store.getState().poll.currentPoll,
+                roomId: data.roomId
+            });
+            
+            // Always clear previous poll state when a new poll is created
+            console.log('🧹 Clearing previous poll state for new poll');
+            store.dispatch(clearPoll());
+            
+            // Set the new poll immediately for students
             store.dispatch(setPoll(data.poll));
+            console.log('✅ New poll set in Redux:', data.poll);
+            
+            // Store for state recovery
+            this.stateRecovery.lastPollState = data.poll;
         });
 
         this.socket.on('poll-started', (data) => {
@@ -156,14 +235,27 @@ class SocketService {
 
         // Poll Status Response
         this.socket.on('poll-status', (data) => {
+            console.log('📊 Poll status received:', data);
+            
             if (data.activePoll) {
+                // Set the current poll (setPoll now handles active state properly)
                 store.dispatch(setPoll(data.activePoll));
+                console.log('✅ Poll status updated in Redux:', {
+                    question: data.activePoll.question,
+                    isActive: data.activePoll.isActive,
+                    options: data.activePoll.options
+                });
+                
                 if (data.results) {
                     store.dispatch(updateResults({
                         results: data.results,
                         totalResponses: data.totalResponses
                     }));
                 }
+            } else {
+                console.log('📊 No active poll found');
+                // Clear poll state if no poll exists
+                store.dispatch(clearPoll());
             }
         });
 
@@ -196,7 +288,15 @@ class SocketService {
 
     handleConnectionError(error) {
         this.isConnected = false;
-        store.dispatch(setConnectionStatus(false));
+        this.connectionStatus = 'error';
+        
+        store.dispatch(setConnectionStatus({
+            connected: false,
+            status: 'error',
+            error: error.message || 'Connection failed',
+            attempt: this.reconnectAttempts
+        }));
+        
         console.error('Socket connection failed:', error);
         
         // Try to reconnect after a delay
@@ -204,12 +304,47 @@ class SocketService {
             setTimeout(() => {
                 this.handleReconnection();
             }, 2000);
+        } else {
+            store.dispatch(setPollError('Unable to connect to server. Please check your connection and refresh the page.'));
         }
+    }
+
+    attemptStateRecovery() {
+        if (!this.stateRecovery.enabled) return;
+
+        // Recover user state if we were previously connected
+        if (this.stateRecovery.lastUserState) {
+            const { userType, roomId } = this.stateRecovery.lastUserState;
+            
+            if (userType === 'teacher' && roomId) {
+                console.log('🔄 Attempting to recover teacher state...');
+                // Teachers would need to rejoin their room
+            } else if (userType === 'student' && roomId) {
+                console.log('🔄 Attempting to recover student state...');
+                // Students can rejoin with their existing session data
+                const studentData = JSON.parse(sessionStorage.getItem('studentData') || '{}');
+                if (studentData.name) {
+                    this.joinAsStudent(studentData);
+                }
+            }
+        }
+
+        // Request current poll status
+        this.getPollStatus();
     }
 
     handleReconnection() {
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
+            this.connectionStatus = 'connecting';
+            
+            store.dispatch(setConnectionStatus({
+                connected: false,
+                status: 'connecting',
+                attempt: this.reconnectAttempts,
+                maxAttempts: this.maxReconnectAttempts
+            }));
+
             console.log(`🔄 Attempting to reconnect... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
 
             setTimeout(() => {
@@ -219,6 +354,14 @@ class SocketService {
             }, this.reconnectDelay * this.reconnectAttempts);
         } else {
             console.error('❌ Max reconnection attempts reached');
+            this.connectionStatus = 'error';
+            
+            store.dispatch(setConnectionStatus({
+                connected: false,
+                status: 'error',
+                message: 'Connection lost. Please refresh the page.'
+            }));
+            
             store.dispatch(setPollError('Connection lost. Please refresh the page.'));
         }
     }
@@ -234,26 +377,62 @@ class SocketService {
         }
     }
 
+    // Room Management
+    joinAsTeacher(teacherData) {
+        // Store teacher state for recovery
+        this.stateRecovery.lastUserState = {
+            userType: 'teacher',
+            data: teacherData
+        };
+        return this.emit('teacher-join', teacherData);
+    }
+
     // Teacher Events
     createPoll(pollData) {
-        return this.emit('teacher-create-poll', pollData);
+        // Use new room-aware event name
+        return this.emit('create-poll', {
+            ...pollData,
+            roomId: this.roomId
+        });
     }
 
     startPoll(pollId) {
-        return this.emit('teacher-start-poll', { pollId });
+        return this.emit('teacher-start-poll', { 
+            pollId,
+            roomId: this.roomId
+        });
     }
 
     endPoll(pollId) {
-        return this.emit('teacher-end-poll', { pollId });
+        return this.emit('teacher-end-poll', { 
+            pollId,
+            roomId: this.roomId
+        });
     }
 
     // Student Events
     joinAsStudent(studentData) {
-        return this.emit('student-join', studentData);
+        // Store student state for recovery
+        this.stateRecovery.lastUserState = {
+            userType: 'student',
+            roomId: studentData.roomId || null,
+            data: studentData
+        };
+        
+        // Store in session storage for persistence
+        sessionStorage.setItem('studentData', JSON.stringify(studentData));
+        
+        return this.emit('student-join', {
+            ...studentData,
+            roomId: this.roomId || studentData.roomId
+        });
     }
 
     submitAnswer(answerData) {
-        return this.emit('submit-answer', answerData);
+        return this.emit('submit-answer', {
+            ...answerData,
+            roomId: this.roomId
+        });
     }
 
     // Utility Events
@@ -265,21 +444,71 @@ class SocketService {
         return this.emit('sync-timer', { pollId });
     }
 
+    // Enhanced utility methods
+    forceTimerSync() {
+        const state = store.getState();
+        const currentPoll = state.poll.currentPoll;
+        if (currentPoll?.id) {
+            this.syncTimer(currentPoll.id);
+        }
+    }
+
     // Connection Management
     disconnect() {
         if (this.socket) {
             this.isConnected = false;
+            this.connectionStatus = 'disconnected';
             this.socket.disconnect();
-            store.dispatch(setConnectionStatus(false));
+            
+            // Clear state
+            this.roomId = null;
+            this.userType = null;
+            
+            store.dispatch(setConnectionStatus({
+                connected: false,
+                status: 'disconnected'
+            }));
         }
     }
 
+    // Connection status helpers
     isSocketConnected() {
-        return this.socket && this.isConnected;
+        return this.socket && this.isConnected && this.connectionStatus === 'connected';
+    }
+
+    getConnectionStatus() {
+        return {
+            connected: this.isConnected,
+            status: this.connectionStatus,
+            socketId: this.getSocketId(),
+            roomId: this.roomId,
+            userType: this.userType,
+            reconnectAttempts: this.reconnectAttempts,
+            lastDisconnectReason: this.lastDisconnectReason
+        };
     }
 
     getSocketId() {
         return this.socket ? this.socket.id : null;
+    }
+
+    getRoomId() {
+        return this.roomId;
+    }
+
+    getUserType() {
+        return this.userType;
+    }
+
+    // State management
+    clearStateRecovery() {
+        this.stateRecovery.lastPollState = null;
+        this.stateRecovery.lastUserState = null;
+        sessionStorage.removeItem('studentData');
+    }
+
+    enableStateRecovery(enabled = true) {
+        this.stateRecovery.enabled = enabled;
     }
 }
 
